@@ -6,6 +6,8 @@ const DELAY_BETWEEN_INSTANCES = 60 * 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 class InstanceManager {
   constructor() {
     this.runningInstances = new Set();
