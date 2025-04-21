@@ -1,12 +1,12 @@
 {
-  "name": "annoy-bml",
+  "name": "bml-spammer",
   "type": "module",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "messenger": "node messenger-bot.js",
-    "bml": "node spam-bml.js",
-    "start": "node messenger-bot.js && node spam-bml.js"
+    "web": "node spam-web.js",
+    "start": "node messenger-bot.js && node spam-web.js"
   },
   "keywords": [],
   "author": "",

@@ -1,4 +1,4 @@
-import { startBot } from "./bml-bot.js";
+import { startBot } from "./web.js";
 
 const NUM_CONCURRENT_INSTANCES = 100;
 const INSTANCE_LIFETIME = 100 * 60 * 1000;
