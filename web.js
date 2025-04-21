@@ -44,15 +44,18 @@ const CONFIG = {
   userAgent:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
   delays: {
-    pageLoad: 100000,
+    pageLoad: 120000,
     challenge: 60000,
     retry: 5000,
   },
   browserOptions: {
     headless: true,
-    defaultViewport: null,
-    timeout: 60000,
-    protocolTimeout: 60000,
+    defaultViewport: {
+      width: 1920,
+      height: 1080,
+    },
+    timeout: 120000,
+    protocolTimeout: 120000,
     args: [
       "--disable-web-security",
       "--disable-features=IsolateOrigins,site-per-process",
@@ -68,6 +71,11 @@ const CONFIG = {
       "--disable-extensions",
       "--no-zygote",
       "--single-process",
+      "--disable-setuid-sandbox",
+      "--ignore-certificate-errors",
+      "--ignore-certificate-errors-spki-list",
+      "--disable-infobars",
+      "--disable-notifications",
     ],
     pipe: true,
   },
@@ -308,14 +316,55 @@ async function startBot(instanceIndex = 0) {
     });
 
     console.log("Loading website...");
-    await page.goto(CONFIG.targetUrl, {
-      waitUntil: ["load", "domcontentloaded"],
-      timeout: 30000,
-    });
+    try {
+      // First attempt with a basic timeout
+      await Promise.race([
+        page.goto(CONFIG.targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: CONFIG.delays.pageLoad,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Initial navigation timeout")),
+            CONFIG.delays.pageLoad
+          )
+        ),
+      ]);
 
-    await page.waitForFunction(() => document.readyState === "complete", {
-      timeout: 30000,
-    });
+      // Wait for the page to be actually usable
+      await Promise.race([
+        Promise.all([
+          page.waitForFunction(() => document.readyState === "complete", {
+            timeout: CONFIG.delays.pageLoad,
+          }),
+          page.waitForFunction(
+            () => {
+              const loader = document.querySelector("#loading");
+              return !loader || loader.style.display === "none";
+            },
+            { timeout: CONFIG.delays.pageLoad }
+          ),
+        ]),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Page readiness timeout")),
+            CONFIG.delays.pageLoad
+          )
+        ),
+      ]);
+
+      // Add a small delay to ensure dynamic content starts loading
+      await delay(5000);
+    } catch (error) {
+      console.error("Navigation error:", error.message);
+      // Take a screenshot for debugging if needed
+      try {
+        await page.screenshot({ path: `error-${Date.now()}.png` });
+      } catch (e) {
+        console.error("Failed to take error screenshot:", e.message);
+      }
+      throw error;
+    }
 
     await delay(2000);
 
