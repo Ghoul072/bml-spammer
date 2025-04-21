@@ -1,81 +1,102 @@
 import { startBot } from "./web.js";
+import fs from "fs";
+import path from "path";
 
 const NUM_CONCURRENT_INSTANCES = 100;
 const INSTANCE_LIFETIME = 100 * 60 * 1000;
-const DELAY_BETWEEN_INSTANCES = 60 * 1000;
+const DELAY_BETWEEN_INSTANCES = 60 * 1000; // Reduced to 2 seconds since we're using separate browsers
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
+
+// Create directory for browser data if it doesn't exist
+const BROWSER_DATA_DIR = "./browser-data";
+if (!fs.existsSync(BROWSER_DATA_DIR)) {
+  fs.mkdirSync(BROWSER_DATA_DIR);
+}
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class InstanceManager {
   constructor() {
-    this.runningInstances = new Set();
+    this.instances = new Map(); // Map to store instance information
     this.instanceCounter = 0;
-    this.failedAttempts = new Map();
   }
 
-  async startInstanceWithRetry(retryCount = 0) {
-    const instanceId = ++this.instanceCounter;
+  async startInstance(instanceIndex) {
+    const instanceId = instanceIndex + 1;
 
     try {
-      console.log(
-        `Starting bot instance ${instanceId} (Attempt ${
-          retryCount + 1
-        }/${MAX_RETRIES})`
-      );
-      this.runningInstances.add(instanceId);
+      console.log(`Starting instance ${instanceId}`);
 
-      // Add cooldown if this instance has failed before
-      const failCount = this.failedAttempts.get(instanceId) || 0;
-      if (failCount > 0) {
-        const cooldownTime = failCount * RETRY_DELAY;
-        console.log(
-          `Cooling down instance ${instanceId} for ${
-            cooldownTime / 1000
-          } seconds...`
-        );
-        await delay(cooldownTime);
+      // Create unique directory for this instance
+      const instanceDir = path.join(
+        BROWSER_DATA_DIR,
+        `instance-${instanceIndex}`
+      );
+      if (!fs.existsSync(instanceDir)) {
+        fs.mkdirSync(instanceDir);
       }
 
+      // Start the bot with timeout
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
-          reject(new Error("Instance lifetime exceeded"));
+          reject(new Error(`Instance ${instanceId} lifetime exceeded`));
         }, INSTANCE_LIFETIME);
       });
 
-      await Promise.race([startBot(instanceId - 1), timeoutPromise]);
+      const botPromise = startBot(instanceIndex);
 
-      // Reset failed attempts on success
-      this.failedAttempts.delete(instanceId);
+      // Store instance information
+      this.instances.set(instanceId, {
+        startTime: Date.now(),
+        status: "running",
+        retryCount: 0,
+      });
+
+      // Race between bot and timeout
+      await Promise.race([botPromise, timeoutPromise]);
     } catch (error) {
-      console.error(`Error in bot instance ${instanceId}:`, error);
+      console.error(`Instance ${instanceId} error:`, error.message);
 
-      // Increment failed attempts
-      const failCount = (this.failedAttempts.get(instanceId) || 0) + 1;
-      this.failedAttempts.set(instanceId, failCount);
-
-      if (retryCount < MAX_RETRIES - 1) {
-        const retryDelay = RETRY_DELAY * (retryCount + 1);
+      const instance = this.instances.get(instanceId);
+      if (instance && instance.retryCount < MAX_RETRIES) {
+        instance.retryCount++;
+        instance.status = "retrying";
         console.log(
-          `Retrying instance ${instanceId} in ${retryDelay / 1000} seconds...`
+          `Retrying instance ${instanceId} (Attempt ${instance.retryCount}/${MAX_RETRIES})`
         );
-        await delay(retryDelay);
-        return this.startInstanceWithRetry(retryCount + 1);
+
+        // Clean up instance directory before retry
+        try {
+          const instanceDir = path.join(
+            BROWSER_DATA_DIR,
+            `instance-${instanceIndex}`
+          );
+          if (fs.existsSync(instanceDir)) {
+            fs.rmSync(instanceDir, { recursive: true, force: true });
+          }
+        } catch (cleanupError) {
+          console.error(
+            `Failed to cleanup instance ${instanceId} directory:`,
+            cleanupError
+          );
+        }
+
+        await delay(RETRY_DELAY);
+        return this.startInstance(instanceIndex);
       }
     } finally {
-      this.runningInstances.delete(instanceId);
-      await delay(DELAY_BETWEEN_INSTANCES);
-      this.scheduleNewInstance();
+      // Cleanup regardless of success or failure
+      this.instances.delete(instanceId);
+      this.startNewInstanceIfNeeded();
     }
   }
 
-  async scheduleNewInstance() {
-    if (this.runningInstances.size < NUM_CONCURRENT_INSTANCES) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, DELAY_BETWEEN_INSTANCES)
-      );
-      this.startInstanceWithRetry();
+  async startNewInstanceIfNeeded() {
+    if (this.instances.size < NUM_CONCURRENT_INSTANCES) {
+      const nextIndex = this.instanceCounter++;
+      this.startInstance(nextIndex);
+      await delay(DELAY_BETWEEN_INSTANCES);
     }
   }
 
@@ -83,22 +104,42 @@ class InstanceManager {
     console.log(
       `Starting initial batch of ${NUM_CONCURRENT_INSTANCES} instances...`
     );
+
+    // Start instances with slight delays
     for (let i = 0; i < NUM_CONCURRENT_INSTANCES; i++) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, i * DELAY_BETWEEN_INSTANCES)
-      );
-      this.startInstanceWithRetry();
+      this.startInstance(i);
+      await delay(DELAY_BETWEEN_INSTANCES);
+    }
+  }
+
+  async cleanup() {
+    console.log("Cleaning up all instances...");
+
+    // Remove all browser data directories
+    try {
+      if (fs.existsSync(BROWSER_DATA_DIR)) {
+        fs.rmSync(BROWSER_DATA_DIR, { recursive: true, force: true });
+      }
+    } catch (error) {
+      console.error("Failed to cleanup browser data:", error);
     }
   }
 }
 
 const manager = new InstanceManager();
+
+// Handle cleanup on exit
+async function handleExit() {
+  console.log("Shutting down...");
+  await manager.cleanup();
+  process.exit();
+}
+
+process.on("SIGINT", handleExit);
+process.on("SIGTERM", handleExit);
+
+// Start the manager
 manager.initialize().catch((error) => {
   console.error("Error initializing instance manager:", error);
-  process.exit(1);
-});
-
-process.on("SIGINT", async () => {
-  console.log("Shutting down...");
-  process.exit();
+  handleExit();
 });

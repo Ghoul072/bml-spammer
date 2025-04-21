@@ -2,10 +2,19 @@ import axios from "axios";
 import puppeteer from "puppeteer";
 import { exec } from "child_process";
 import { promisify } from "util";
+import fs from "fs";
+import path from "path";
 
 const execAsync = promisify(exec);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const SCREENSHOTS_DIR = "./screenshots";
+
+// Create screenshots directory if it doesn't exist
+if (!fs.existsSync(SCREENSHOTS_DIR)) {
+  fs.mkdirSync(SCREENSHOTS_DIR);
+}
 
 function generateCredentials(instanceIndex) {
   // Generate phone number starting with +9607 or +9609
@@ -91,32 +100,267 @@ async function launchBrowserWithRetry(instanceIndex, retryCount = 0) {
       args: [
         ...CONFIG.browserOptions.args,
         `--remote-debugging-port=${debugPort}`,
+        `--user-data-dir=./browser-data/instance-${instanceIndex}`,
       ],
     };
 
-    // Kill any existing Chrome processes that might interfere
-    try {
-      await execAsync("pkill -f chrome");
-    } catch (error) {
-      // Ignore errors from pkill as it's okay if no processes were found
-    }
-
-    // Wait a moment after killing processes
-    await delay(2000);
-
     console.log(
-      `Attempting to launch browser (Attempt ${
+      `Instance ${instanceIndex + 1}: Attempting to launch browser (Attempt ${
         retryCount + 1
       }/${MAX_BROWSER_RETRIES})`
     );
     return await puppeteer.launch(browserOptions);
   } catch (error) {
     if (retryCount < MAX_BROWSER_RETRIES - 1) {
-      console.log(`Browser launch failed, retrying in 5 seconds...`);
+      console.log(
+        `Instance ${
+          instanceIndex + 1
+        }: Browser launch failed, retrying in 5 seconds...`
+      );
       await delay(5000);
       return launchBrowserWithRetry(instanceIndex, retryCount + 1);
     }
     throw error;
+  }
+}
+
+async function takeErrorScreenshot(page, prefix) {
+  try {
+    // Check if page is still valid
+    if (!page || page.isClosed()) {
+      console.log(
+        `Cannot take screenshot: page is ${page ? "closed" : "undefined"}`
+      );
+      return false;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = path.join(SCREENSHOTS_DIR, `${prefix}-${timestamp}.png`);
+
+    // Try to take screenshot
+    try {
+      await page.screenshot({
+        path: filename,
+        fullPage: true,
+      });
+
+      // Verify the file was actually created and has content
+      if (fs.existsSync(filename) && fs.statSync(filename).size > 0) {
+        console.log(`Screenshot successfully saved: ${filename}`);
+        return true;
+      } else {
+        console.log(`Screenshot file empty or not created: ${filename}`);
+        return false;
+      }
+    } catch (screenshotError) {
+      console.log(
+        `Screenshot capture failed (${prefix}): ${screenshotError.message}`
+      );
+
+      // Try a fallback screenshot method if the page is still valid
+      try {
+        if (!page.isClosed()) {
+          const fallbackFilename = path.join(
+            SCREENSHOTS_DIR,
+            `fallback-${prefix}-${timestamp}.png`
+          );
+          await page
+            .evaluate(() => {
+              return new Promise((resolve) => {
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                context.fillStyle = "white";
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                // Draw the page content
+                const image = new Image();
+                image.onload = () => {
+                  context.drawImage(image, 0, 0);
+                  resolve(canvas.toDataURL());
+                };
+                image.src =
+                  "data:image/svg+xml," +
+                  encodeURIComponent(
+                    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' +
+                      document.documentElement.innerHTML +
+                      "</div></foreignObject></svg>"
+                  );
+              });
+            })
+            .then((dataUrl) => {
+              const base64Data = dataUrl.replace(
+                /^data:image\/\w+;base64,/,
+                ""
+              );
+              fs.writeFileSync(
+                fallbackFilename,
+                Buffer.from(base64Data, "base64")
+              );
+              console.log(`Fallback screenshot saved: ${fallbackFilename}`);
+              return true;
+            });
+        }
+      } catch (fallbackError) {
+        console.log(`Fallback screenshot failed: ${fallbackError.message}`);
+      }
+      return false;
+    }
+  } catch (e) {
+    console.error(`Failed to take screenshot (${prefix}):`, e.message);
+    return false;
+  }
+}
+
+async function getNewChatFrame(page) {
+  try {
+    // Check if page is still valid
+    if (!page || page.isClosed()) {
+      console.log("Page is no longer valid");
+      return null;
+    }
+
+    // Wait for network idle first
+    try {
+      await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {});
+    } catch (e) {
+      // Ignore network idle timeout
+    }
+
+    // Check if chat is minimized by looking for the chat button
+    const isChatMinimized = await page.evaluate(() => {
+      const chatButton = document.getElementById("ymDivBar");
+      // Check if the button is visible
+      return (
+        chatButton &&
+        window.getComputedStyle(chatButton).display !== "none" &&
+        window.getComputedStyle(chatButton).visibility !== "hidden"
+      );
+    });
+
+    if (isChatMinimized) {
+      console.log("Chat appears to be minimized, attempting to reopen...");
+      try {
+        // Click the chat button to reopen
+        await page.click("#ymDivBar");
+        // Wait a moment for animation
+        await delay(1000);
+      } catch (error) {
+        console.log("Failed to click chat button to reopen:", error.message);
+        await takeErrorScreenshot(page, "reopen-click-failed");
+        return null;
+      }
+    }
+
+    // Wait for frame with better error handling
+    try {
+      const frameHandle = await page.waitForSelector('iframe[id*="ymIframe"]', {
+        timeout: 30000,
+        visible: true, // Make sure frame is visible
+      });
+
+      if (!frameHandle) {
+        console.log("Frame handle is null, taking screenshot...");
+        await takeErrorScreenshot(page, "frame-null");
+        return null;
+      }
+
+      const frame = await frameHandle.contentFrame();
+
+      // Verify frame is actually accessible and set up monitoring
+      if (frame) {
+        try {
+          // Try to access something in the frame to verify it's working
+          await frame.evaluate(() => {
+            // Add event listeners to detect minimize/close actions
+            document.addEventListener(
+              "click",
+              (e) => {
+                if (
+                  e.target.matches(
+                    ".minimize-button, .close-button, .ym-minimize, .ym-close"
+                  )
+                ) {
+                  console.log("Chat minimize/close button clicked");
+                }
+              },
+              true
+            );
+            return document.body !== null;
+          });
+
+          // Set up a MutationObserver to watch for frame visibility changes
+          await page.evaluate(() => {
+            const observer = new MutationObserver((mutations) => {
+              mutations.forEach((mutation) => {
+                if (
+                  mutation.type === "attributes" &&
+                  (mutation.attributeName === "style" ||
+                    mutation.attributeName === "class")
+                ) {
+                  const frame = document.querySelector(
+                    'iframe[id*="ymIframe"]'
+                  );
+                  if (
+                    frame &&
+                    (frame.style.display === "none" ||
+                      frame.style.visibility === "hidden")
+                  ) {
+                    console.log("Chat frame was hidden");
+                  }
+                }
+              });
+            });
+
+            const frame = document.querySelector('iframe[id*="ymIframe"]');
+            if (frame) {
+              observer.observe(frame, {
+                attributes: true,
+                attributeFilter: ["style", "class"],
+              });
+            }
+          });
+
+          return frame;
+        } catch (error) {
+          if (error.message.includes("detached")) {
+            console.log("Frame was detached during verification");
+            await takeErrorScreenshot(page, "frame-detached-during-verify");
+            return null;
+          }
+          console.log("Frame verification failed, taking screenshot...");
+          await takeErrorScreenshot(page, "frame-verification-failed");
+          return null;
+        }
+      }
+
+      console.log("Frame not accessible, taking screenshot...");
+      await takeErrorScreenshot(page, "frame-not-accessible");
+      return null;
+    } catch (error) {
+      if (error.message.includes("detached")) {
+        console.log("Frame was detached while waiting");
+        await takeErrorScreenshot(page, "frame-detached-while-waiting");
+        return null;
+      }
+      console.log(`Frame wait failed: ${error.message}, taking screenshot...`);
+      await takeErrorScreenshot(page, "frame-wait-failed");
+      return null;
+    }
+  } catch (error) {
+    console.log(`General frame error: ${error.message}`);
+    await takeErrorScreenshot(page, "frame-general-error");
+    return null;
+  }
+}
+
+async function isPageValid(page) {
+  try {
+    if (!page || page.isClosed()) return false;
+    await page.evaluate(() => document.readyState);
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -137,25 +381,8 @@ async function startChat(page, responses) {
 
     await delay(10000);
 
-    // Click the chat button and wait for frame
-    async function getNewChatFrame() {
-      try {
-        await page.click("#ymDivBar");
-        const frameHandle = await page.waitForSelector(
-          'iframe[id*="ymIframe"]',
-          {
-            timeout: 30000,
-          }
-        );
-        return await frameHandle.contentFrame();
-      } catch (error) {
-        console.log("Failed to get chat frame, retrying...");
-        await delay(5000);
-        return null;
-      }
-    }
-
-    let chatFrame = await getNewChatFrame();
+    // Pass page to getNewChatFrame
+    let chatFrame = await getNewChatFrame(page);
     console.log("Watching for messages...");
     let lastProcessedMessage = "";
     let frameErrorCount = 0;
@@ -165,15 +392,59 @@ async function startChat(page, responses) {
         // Check if frame is still valid
         if (!chatFrame) {
           console.log("Chat frame lost, attempting to recover...");
-          chatFrame = await getNewChatFrame();
-          if (!chatFrame) {
-            frameErrorCount++;
-            if (frameErrorCount > 3) {
-              throw new Error("Failed to recover chat frame after 3 attempts");
+
+          // Verify page is still valid before attempting recovery
+          if (await isPageValid(page)) {
+            await takeErrorScreenshot(
+              page,
+              `frame-recovery-attempt-${frameErrorCount + 1}`
+            );
+
+            // Check if chat was minimized
+            const isChatMinimized = await page.evaluate(() => {
+              const chatButton = document.getElementById("ymDivBar");
+              return (
+                chatButton &&
+                window.getComputedStyle(chatButton).display !== "none" &&
+                window.getComputedStyle(chatButton).visibility !== "hidden"
+              );
+            });
+
+            if (isChatMinimized) {
+              console.log("Chat was minimized, attempting to restore...");
+              // Add a delay before clicking to restore
+              await delay(2000);
             }
-            continue;
+
+            chatFrame = await getNewChatFrame(page);
+
+            if (!chatFrame) {
+              frameErrorCount++;
+              console.log(`Frame recovery attempt ${frameErrorCount}/3 failed`);
+              if (frameErrorCount > 3) {
+                const screenshotTaken = await takeErrorScreenshot(
+                  page,
+                  "frame-recovery-final-failure"
+                );
+                if (!screenshotTaken) {
+                  console.log(
+                    "Could not take final failure screenshot - page may be invalid"
+                  );
+                }
+                throw new Error(
+                  "Failed to recover chat frame after 3 attempts"
+                );
+              }
+              // Progressive delay between attempts
+              await delay(2000 + 3000 * frameErrorCount);
+              continue;
+            }
+            frameErrorCount = 0;
+            console.log("Successfully recovered chat frame");
+          } else {
+            console.log("Page is no longer valid during recovery attempt");
+            throw new Error("Page became invalid during recovery");
           }
-          frameErrorCount = 0;
         }
 
         // Try to find messages
