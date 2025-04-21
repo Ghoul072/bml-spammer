@@ -309,9 +309,15 @@ async function startBot(instanceIndex = 0) {
 
     console.log("Loading website...");
     await page.goto(CONFIG.targetUrl, {
-      waitUntil: "networkidle0",
-      timeout: CONFIG.delays.pageLoad,
+      waitUntil: ["load", "domcontentloaded"],
+      timeout: 30000,
     });
+
+    await page.waitForFunction(() => document.readyState === "complete", {
+      timeout: 30000,
+    });
+
+    await delay(2000);
 
     const initialStatus = await page.evaluate(() => {
       const title = document.title;
