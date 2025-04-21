@@ -222,7 +222,7 @@ async function startChat(page, responses) {
                   sendButton.click();
                 }
               }
-            })
+            }, reply)
             .catch(async (error) => {
               if (error.message.includes("detached")) {
                 chatFrame = null;
@@ -267,6 +267,7 @@ async function startBot(instanceIndex = 0) {
 
   const responses = {
     "I'm Aaya": "Let me talk to a live agent",
+    "Aaya here": "Let me talk to a live agent",
     "phone number": credentials.phoneNumber,
     "what should I call you?": credentials.name,
     "Can I have your ID Card": credentials.idCard,
