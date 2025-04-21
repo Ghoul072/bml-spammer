@@ -9,9 +9,13 @@ const execAsync = promisify(exec);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const BROWSER_DATA_DIR = "./browser-data";
 const SCREENSHOTS_DIR = "./screenshots";
 
-// Create screenshots directory if it doesn't exist
+// Create necessary directories if they don't exist
+if (!fs.existsSync(BROWSER_DATA_DIR)) {
+  fs.mkdirSync(BROWSER_DATA_DIR);
+}
 if (!fs.existsSync(SCREENSHOTS_DIR)) {
   fs.mkdirSync(SCREENSHOTS_DIR);
 }
@@ -90,18 +94,97 @@ const CONFIG = {
   },
 };
 
+// Add this function to handle directory cleanup before launch
+async function cleanupInstanceDirectory(instanceIndex) {
+  const instanceDir = path.join(BROWSER_DATA_DIR, `instance-${instanceIndex}`);
+  const lockFile = path.join(instanceDir, "SingletonLock");
+
+  try {
+    // Create instance directory if it doesn't exist
+    if (!fs.existsSync(instanceDir)) {
+      fs.mkdirSync(instanceDir, { recursive: true });
+    }
+
+    if (fs.existsSync(lockFile)) {
+      fs.unlinkSync(lockFile);
+      console.log(`Removed lock file for instance ${instanceIndex}`);
+    }
+
+    // Also remove any other lock files that might cause issues
+    const lockFiles = [
+      "SingletonLock",
+      "SingletonCookie",
+      "SingletonSocket",
+      ".com.google.Chrome.*.lock",
+    ];
+
+    for (const pattern of lockFiles) {
+      const files = fs.readdirSync(instanceDir).filter((f) => f.match(pattern));
+      for (const file of files) {
+        const filePath = path.join(instanceDir, file);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(
+            `Removed lock file ${file} for instance ${instanceIndex}`
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.log(
+      `Failed to cleanup lock files for instance ${instanceIndex}:`,
+      error.message
+    );
+  }
+}
+
 async function launchBrowserWithRetry(instanceIndex, retryCount = 0) {
   const MAX_BROWSER_RETRIES = 3;
   const debugPort = 9222 + instanceIndex;
+  const instanceDir = path.join(BROWSER_DATA_DIR, `instance-${instanceIndex}`);
 
   try {
+    // Clean up any existing lock files
+    await cleanupInstanceDirectory(instanceIndex);
+
+    // Ensure instance directory exists
+    if (!fs.existsSync(instanceDir)) {
+      fs.mkdirSync(instanceDir, { recursive: true });
+    }
+
     const browserOptions = {
       ...CONFIG.browserOptions,
       args: [
         ...CONFIG.browserOptions.args,
         `--remote-debugging-port=${debugPort}`,
-        `--user-data-dir=./browser-data/instance-${instanceIndex}`,
+        `--user-data-dir=${instanceDir}`,
+        `--disk-cache-dir=${path.join(instanceDir, "cache")}`,
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-setuid-sandbox",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-restore-session-state",
+        "--disable-session-crashed-bubble",
+        "--disable-infobars",
+        "--disable-notifications",
+        "--disable-features=TranslateUI",
+        "--disable-extensions",
+        "--disable-component-extensions-with-background-pages",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--metrics-recording-only",
+        "--disable-default-apps",
+        "--mute-audio",
+        "--no-default-browser-check",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+        `--user-agent=${CONFIG.userAgent}`,
       ],
+      pipe: true,
     };
 
     console.log(
@@ -109,8 +192,10 @@ async function launchBrowserWithRetry(instanceIndex, retryCount = 0) {
         retryCount + 1
       }/${MAX_BROWSER_RETRIES})`
     );
+
     return await puppeteer.launch(browserOptions);
   } catch (error) {
+    console.error(`Launch error for instance ${instanceIndex}:`, error.message);
     if (retryCount < MAX_BROWSER_RETRIES - 1) {
       console.log(
         `Instance ${
@@ -212,7 +297,7 @@ async function takeErrorScreenshot(page, prefix) {
   }
 }
 
-async function getNewChatFrame(page) {
+async function getNewChatFrame(page, instanceId) {
   try {
     // Check if page is still valid
     if (!page || page.isClosed()) {
@@ -364,7 +449,7 @@ async function isPageValid(page) {
   }
 }
 
-async function startChat(page, responses) {
+async function startChat(page, responses, instanceId) {
   try {
     console.log("Waiting for chat widget to load...");
 
@@ -382,7 +467,7 @@ async function startChat(page, responses) {
     await delay(10000);
 
     // Pass page to getNewChatFrame
-    let chatFrame = await getNewChatFrame(page);
+    let chatFrame = await getNewChatFrame(page, instanceId);
     console.log("Watching for messages...");
     let lastProcessedMessage = "";
     let frameErrorCount = 0;
@@ -416,7 +501,7 @@ async function startChat(page, responses) {
               await delay(2000);
             }
 
-            chatFrame = await getNewChatFrame(page);
+            chatFrame = await getNewChatFrame(page, instanceId);
 
             if (!chatFrame) {
               frameErrorCount++;
@@ -538,7 +623,8 @@ async function startChat(page, responses) {
 
 async function startBot(instanceIndex = 0) {
   const credentials = generateCredentials(instanceIndex);
-  console.log(`Starting bot ${credentials.instanceId} with:`, {
+  const instanceId = credentials.instanceId;
+  console.log(`Starting bot ${instanceId} with:`, {
     phone: credentials.phoneNumber,
     name: credentials.name,
     id: credentials.idCard,
@@ -574,9 +660,11 @@ async function startBot(instanceIndex = 0) {
   };
 
   let browser;
+  let page;
+
   try {
     browser = await launchBrowserWithRetry(instanceIndex);
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setUserAgent(CONFIG.userAgent);
 
     await page.setExtraHTTPHeaders({
@@ -693,7 +781,7 @@ async function startBot(instanceIndex = 0) {
     }
 
     console.log("Successfully reached main site");
-    await startChat(page, responses);
+    await startChat(page, responses, instanceId);
 
     return { browser, page };
   } catch (error) {

@@ -7,6 +7,7 @@ const INSTANCE_LIFETIME = 100 * 60 * 1000;
 const DELAY_BETWEEN_INSTANCES = 60 * 1000; // Reduced to 2 seconds since we're using separate browsers
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
+const SCREENSHOTS_DIR = path.join(process.cwd(), "screenshots");
 
 // Create directory for browser data if it doesn't exist
 const BROWSER_DATA_DIR = "./browser-data";
@@ -20,6 +21,29 @@ class InstanceManager {
   constructor() {
     this.instances = new Map(); // Map to store instance information
     this.instanceCounter = 0;
+    this.setupDirectories();
+  }
+
+  setupDirectories() {
+    // Ensure screenshots directory exists and is empty
+    if (fs.existsSync(SCREENSHOTS_DIR)) {
+      try {
+        fs.rmSync(SCREENSHOTS_DIR, { recursive: true, force: true });
+      } catch (error) {
+        console.error("Failed to clean screenshots directory:", error);
+      }
+    }
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+
+    // Setup browser data directory
+    if (fs.existsSync(BROWSER_DATA_DIR)) {
+      try {
+        fs.rmSync(BROWSER_DATA_DIR, { recursive: true, force: true });
+      } catch (error) {
+        console.error("Failed to clean browser data directory:", error);
+      }
+    }
+    fs.mkdirSync(BROWSER_DATA_DIR, { recursive: true });
   }
 
   async startInstance(instanceIndex) {
@@ -34,7 +58,7 @@ class InstanceManager {
         `instance-${instanceIndex}`
       );
       if (!fs.existsSync(instanceDir)) {
-        fs.mkdirSync(instanceDir);
+        fs.mkdirSync(instanceDir, { recursive: true });
       }
 
       // Start the bot with timeout
@@ -57,6 +81,16 @@ class InstanceManager {
       await Promise.race([botPromise, timeoutPromise]);
     } catch (error) {
       console.error(`Instance ${instanceId} error:`, error.message);
+
+      // Ensure error screenshots are saved even for instance startup failures
+      if (error.page) {
+        await captureErrorState(
+          error.page,
+          "instance-startup-error",
+          instanceId,
+          error
+        );
+      }
 
       const instance = this.instances.get(instanceId);
       if (instance && instance.retryCount < MAX_RETRIES) {
