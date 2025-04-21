@@ -116,6 +116,7 @@ async function startChat(page, responses) {
   try {
     console.log("Waiting for chat widget to load...");
 
+    // Wait for initial widget load
     await page.waitForFunction(
       () => {
         return (
@@ -127,30 +128,65 @@ async function startChat(page, responses) {
     );
 
     await delay(10000);
-    await page.click("#ymDivBar");
 
-    const frameHandle = await page.waitForSelector('iframe[id*="ymIframe"]', {
-      timeout: 30000,
-    });
-    const chatFrame = await frameHandle.contentFrame();
+    // Click the chat button and wait for frame
+    async function getNewChatFrame() {
+      try {
+        await page.click("#ymDivBar");
+        const frameHandle = await page.waitForSelector(
+          'iframe[id*="ymIframe"]',
+          {
+            timeout: 30000,
+          }
+        );
+        return await frameHandle.contentFrame();
+      } catch (error) {
+        console.log("Failed to get chat frame, retrying...");
+        await delay(5000);
+        return null;
+      }
+    }
 
+    let chatFrame = await getNewChatFrame();
     console.log("Watching for messages...");
     let lastProcessedMessage = "";
+    let frameErrorCount = 0;
 
     while (true) {
       try {
-        await chatFrame.waitForSelector(".chat-message", { timeout: 10000 });
+        // Check if frame is still valid
+        if (!chatFrame) {
+          console.log("Chat frame lost, attempting to recover...");
+          chatFrame = await getNewChatFrame();
+          if (!chatFrame) {
+            frameErrorCount++;
+            if (frameErrorCount > 3) {
+              throw new Error("Failed to recover chat frame after 3 attempts");
+            }
+            continue;
+          }
+          frameErrorCount = 0;
+        }
 
-        const messages = await chatFrame.evaluate(() => {
-          const rows = Array.from(document.querySelectorAll(".chat-message"));
-          return rows
-            .filter((row) => row.classList.contains("from-them"))
-            .map((row) => ({
-              text: row.innerText.trim(),
-              isBot: row.classList.contains("from-them"),
-            }))
-            .reverse();
-        });
+        // Try to find messages
+        const messages = await chatFrame
+          .evaluate(() => {
+            const rows = Array.from(document.querySelectorAll(".chat-message"));
+            return rows
+              .filter((row) => row.classList.contains("from-them"))
+              .map((row) => ({
+                text: row.innerText.trim(),
+                isBot: row.classList.contains("from-them"),
+              }))
+              .reverse();
+          })
+          .catch(async (error) => {
+            if (error.message.includes("detached")) {
+              chatFrame = null;
+              return [];
+            }
+            throw error;
+          });
 
         const mostRecentMessage = messages.find((m) => m.isBot)?.text;
 
@@ -168,38 +204,47 @@ async function startChat(page, responses) {
 
           console.log(`💬 [Bot] "${mostRecentMessage}" → "${reply}"`);
 
-          // Send message with proper timing
-          await chatFrame.evaluate(async (text) => {
-            const input = document.querySelector("input#ymMsgInput");
-            if (input) {
-              // Clear any existing text
-              input.value = "";
-              input.focus();
+          // Send message with proper timing and error handling
+          await chatFrame
+            .evaluate(async (text) => {
+              const input = document.querySelector("input#ymMsgInput");
+              if (input) {
+                input.value = "";
+                input.focus();
+                input.value = text;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                await new Promise((resolve) => setTimeout(resolve, 500));
 
-              // Type the text
-              input.value = text;
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-
-              // Small delay before sending
-              await new Promise((resolve) => setTimeout(resolve, 500));
-
-              const sendButton = document.querySelector(
-                'button[type="submit"], button.send-button, button[aria-label="Send"], button.ym-send-button'
-              );
-              if (sendButton) {
-                sendButton.click();
+                const sendButton = document.querySelector(
+                  'button[type="submit"], button.send-button, button[aria-label="Send"], button.ym-send-button'
+                );
+                if (sendButton) {
+                  sendButton.click();
+                }
               }
-            }
-          }, reply);
+            })
+            .catch(async (error) => {
+              if (error.message.includes("detached")) {
+                chatFrame = null;
+                return;
+              }
+              throw error;
+            });
 
-          // Wait for message to be sent before processing next one
-          await delay(2000);
-          lastProcessedMessage = mostRecentMessage;
+          if (chatFrame) {
+            // Only update if frame is still valid
+            await delay(2000);
+            lastProcessedMessage = mostRecentMessage;
+          }
         }
 
         await delay(5000);
       } catch (err) {
         if (err.message.includes("timeout")) {
+          continue;
+        }
+        if (err.message.includes("detached")) {
+          chatFrame = null;
           continue;
         }
         console.error("⚠️ Error:", err.message);
@@ -222,7 +267,7 @@ async function startBot(instanceIndex = 0) {
 
   const responses = {
     "I'm Aaya": "Let me talk to a live agent",
-    "To stay in touch with you, what phone number": credentials.phoneNumber,
+    "phone number": credentials.phoneNumber,
     "what should I call you?": credentials.name,
     "Can I have your ID Card": credentials.idCard,
     "Were you satisfied with our live agent's help?": "Very Poor",
