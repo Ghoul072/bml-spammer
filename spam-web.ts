@@ -1,4 +1,4 @@
-import { startBot } from "./web.js";
+import { startBot } from "./web.ts";
 import fs from "fs";
 import path from "path";
 
@@ -18,8 +18,11 @@ if (!fs.existsSync(BROWSER_DATA_DIR)) {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class InstanceManager {
+  private instances: Map<number, any>;
+  private instanceCounter: number;
+
   constructor() {
-    this.instances = new Map(); // Map to store instance information
+    this.instances = new Map();
     this.instanceCounter = 0;
     this.setupDirectories();
   }
@@ -177,3 +180,17 @@ manager.initialize().catch((error) => {
   console.error("Error initializing instance manager:", error);
   handleExit();
 });
+
+async function captureErrorState(
+  page: any,
+  prefix: string,
+  instanceId: number,
+  error: Error
+) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const screenshotFile = path.join(
+    SCREENSHOTS_DIR,
+    `instance-${instanceId}-${prefix}-${timestamp}.png`
+  );
+  await page.screenshot({ path: screenshotFile, fullPage: true });
+}

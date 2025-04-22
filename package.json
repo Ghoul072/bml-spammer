@@ -2,22 +2,23 @@
   "name": "bml-spammer",
   "type": "module",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "spam-web.ts",
   "scripts": {
-    "messenger": "node messenger-bot.js",
-    "web": "node spam-web.js",
-    "start": "node messenger-bot.js && node spam-web.js"
+    "messenger": "node messenger-bot.ts",
+    "web": "node spam-web.ts",
+    "start": "node messenger-bot.ts && node spam-web.ts"
   },
   "keywords": [],
-  "author": "",
+  "author": "Ghoul072",
   "license": "ISC",
   "description": "",
   "dependencies": {
     "axios": "^1.8.4",
-    "playwright": "^1.52.0",
-    "playwright-stealth": "^0.0.1",
     "puppeteer": "^24.6.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1"
   }
 }

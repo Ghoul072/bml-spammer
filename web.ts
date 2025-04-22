@@ -250,6 +250,7 @@ async function takeErrorScreenshot(page, prefix) {
               return new Promise((resolve) => {
                 const canvas = document.createElement("canvas");
                 const context = canvas.getContext("2d");
+                if (!context) throw new Error("Could not get canvas context");
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
                 context.fillStyle = "white";
@@ -358,7 +359,8 @@ async function getNewChatFrame(page, instanceId) {
               "click",
               (e) => {
                 if (
-                  e.target.matches(
+                  e.target &&
+                  (e.target as HTMLElement).matches(
                     ".minimize-button, .close-button, .ym-minimize, .ym-close"
                   )
                 ) {
@@ -383,9 +385,9 @@ async function getNewChatFrame(page, instanceId) {
                     'iframe[id*="ymIframe"]'
                   );
                   if (
-                    frame &&
-                    (frame.style.display === "none" ||
-                      frame.style.visibility === "hidden")
+                    (frame &&
+                      (frame as HTMLElement).style.display === "none") ||
+                    (frame as HTMLElement).style.visibility === "hidden"
                   ) {
                     console.log("Chat frame was hidden");
                   }
@@ -453,7 +455,7 @@ async function startChat(page, responses, instanceId) {
     await page.waitForFunction(
       () => {
         return (
-          typeof window.YellowMessengerPlugin !== "undefined" &&
+          typeof (window as any).YellowMessengerPlugin !== "undefined" &&
           document.getElementById("ymDivBar") !== null
         );
       },
@@ -535,7 +537,7 @@ async function startChat(page, responses, instanceId) {
             return rows
               .filter((row) => row.classList.contains("from-them"))
               .map((row) => ({
-                text: row.innerText.trim(),
+                text: (row as HTMLElement).innerText.trim(),
                 isBot: row.classList.contains("from-them"),
               }))
               .reverse();
@@ -553,7 +555,10 @@ async function startChat(page, responses, instanceId) {
         if (mostRecentMessage && mostRecentMessage !== lastProcessedMessage) {
           let reply = defaultReply;
 
-          for (const [trigger, response] of Object.entries(responses)) {
+          for (const [trigger, response] of Object.entries(responses) as [
+            string,
+            string
+          ][]) {
             if (
               mostRecentMessage.toLowerCase().includes(trigger.toLowerCase())
             ) {
@@ -567,7 +572,9 @@ async function startChat(page, responses, instanceId) {
           // Send message with proper timing and error handling
           await chatFrame
             .evaluate(async (text) => {
-              const input = document.querySelector("input#ymMsgInput");
+              const input = document.querySelector(
+                "input#ymMsgInput"
+              ) as HTMLInputElement;
               if (input) {
                 input.value = "";
                 input.focus();
@@ -577,7 +584,7 @@ async function startChat(page, responses, instanceId) {
 
                 const sendButton = document.querySelector(
                   'button[type="submit"], button.send-button, button[aria-label="Send"], button.ym-send-button'
-                );
+                ) as HTMLButtonElement;
                 if (sendButton) {
                   sendButton.click();
                 }
@@ -626,7 +633,7 @@ async function startBot(instanceIndex = 0) {
     id: credentials.idCard,
   });
 
-  const responses = {
+  const responses: Record<string, string> = {
     "I'm Aaya": "Let me talk to a live agent",
     "Aaya here": "Let me talk to a live agent",
     "phone number": credentials.phoneNumber,
@@ -695,7 +702,7 @@ async function startBot(instanceIndex = 0) {
           }),
           page.waitForFunction(
             () => {
-              const loader = document.querySelector("#loading");
+              const loader = document.querySelector("#loading") as HTMLElement;
               return !loader || loader.style.display === "none";
             },
             { timeout: CONFIG.delays.pageLoad }
