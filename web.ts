@@ -1,5 +1,5 @@
 import axios from "axios";
-import puppeteer from "puppeteer";
+import puppeteer, { Page } from "puppeteer";
 import fs from "fs";
 import path from "path";
 
@@ -205,7 +205,7 @@ async function launchBrowserWithRetry(instanceIndex, retryCount = 0) {
   }
 }
 
-async function takeErrorScreenshot(page, prefix) {
+async function takeErrorScreenshot(page: Page, prefix: string) {
   try {
     // Check if page is still valid
     if (!page || page.isClosed()) {
@@ -271,10 +271,8 @@ async function takeErrorScreenshot(page, prefix) {
               });
             })
             .then((dataUrl) => {
-              const base64Data = dataUrl.replace(
-                /^data:image\/\w+;base64,/,
-                ""
-              );
+              const url = dataUrl as string;
+              const base64Data = url.replace(/^data:image\/\w+;base64,/, "");
               fs.writeFileSync(
                 fallbackFilename,
                 Buffer.from(base64Data, "base64")
@@ -742,7 +740,7 @@ async function startBot(instanceIndex: number, proxy?: string) {
       console.error("Navigation error:", error.message);
       // Take a screenshot for debugging if needed
       try {
-        await page.screenshot({ path: `error-${Date.now()}.png` });
+        await takeErrorScreenshot(page, "navigation-error-");
       } catch (e) {
         console.error("Failed to take error screenshot:", e.message);
       }
