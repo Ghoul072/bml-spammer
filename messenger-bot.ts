@@ -49,7 +49,6 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       ],
     });
 
-    let context = browser.defaultBrowserContext();
     let page;
 
     const authFile = "auth.json";
