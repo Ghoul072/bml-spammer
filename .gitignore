@@ -1,4 +1,7 @@
 node_modules/
 screenshots/
 browser-data/
+config/
+.env
+*.log
 auth.json

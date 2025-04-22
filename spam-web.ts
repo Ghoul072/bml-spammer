@@ -2,12 +2,31 @@ import { startBot } from "./web.ts";
 import fs from "fs";
 import path from "path";
 
+const USE_PROXY = true; // Set to true to enable proxy rotation
 const NUM_CONCURRENT_INSTANCES = 5;
 const INSTANCE_LIFETIME = 5 * 60 * 1000;
-const DELAY_BETWEEN_INSTANCES = 60 * 1000; // Reduced to 2 seconds since we're using separate browsers
+const DELAY_BETWEEN_INSTANCES = 10 * 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
 const SCREENSHOTS_DIR = path.join(process.cwd(), "screenshots");
+
+// Load proxies if enabled
+let proxies: string[] = [];
+if (USE_PROXY) {
+  try {
+    const proxyConfig = JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), "config", "proxies.json"),
+        "utf8"
+      )
+    );
+    proxies = proxyConfig.proxies;
+    console.log(`Loaded ${proxies.length} proxies`);
+  } catch (error) {
+    console.error("Failed to load proxies:", error);
+    process.exit(1);
+  }
+}
 
 // Create directory for browser data if it doesn't exist
 const BROWSER_DATA_DIR = "./browser-data";
@@ -25,6 +44,13 @@ class InstanceManager {
     this.instances = new Map();
     this.instanceCounter = 0;
     this.setupDirectories();
+  }
+
+  getProxyForInstance(instanceIndex: number) {
+    if (!USE_PROXY || proxies.length === 0) return null;
+    // Use modulo to cycle through proxies based on instance index
+    const proxyIndex = instanceIndex % proxies.length;
+    return proxies[proxyIndex];
   }
 
   setupDirectories() {
@@ -51,9 +77,14 @@ class InstanceManager {
 
   async startInstance(instanceIndex) {
     const instanceId = instanceIndex + 1;
+    const proxy = this.getProxyForInstance(instanceIndex);
 
     try {
-      console.log(`Starting instance ${instanceId}`);
+      console.log(
+        `Starting instance ${instanceId}${
+          proxy ? ` with proxy ${proxy.split(":")[2]}` : ""
+        }`
+      );
 
       // Create unique directory for this instance
       const instanceDir = path.join(
@@ -64,20 +95,21 @@ class InstanceManager {
         fs.mkdirSync(instanceDir, { recursive: true });
       }
 
-      // Start the bot with timeout
+      // Start the bot with timeout and proxy
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
           reject(new Error(`Instance ${instanceId} lifetime exceeded`));
         }, INSTANCE_LIFETIME);
       });
 
-      const botPromise = startBot(instanceIndex);
+      const botPromise = startBot(instanceIndex, proxy ?? undefined);
 
       // Store instance information
       this.instances.set(instanceId, {
         startTime: Date.now(),
         status: "running",
         retryCount: 0,
+        proxy: proxy ? proxy.split(":")[2] : null,
       });
 
       // Race between bot and timeout

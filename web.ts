@@ -624,13 +624,14 @@ async function startChat(page, responses, instanceId) {
   }
 }
 
-async function startBot(instanceIndex = 0) {
+async function startBot(instanceIndex: number, proxy?: string) {
   const credentials = generateCredentials(instanceIndex);
   const instanceId = credentials.instanceId;
   console.log(`Starting bot ${instanceId} with:`, {
     phone: credentials.phoneNumber,
     name: credentials.name,
     id: credentials.idCard,
+    proxy: proxy ? proxy.split(":")[2] : "none",
   });
 
   const responses: Record<string, string> = {
@@ -667,6 +668,25 @@ async function startBot(instanceIndex = 0) {
   let page;
 
   try {
+    const browserOptions = {
+      ...CONFIG.browserOptions,
+      args: [
+        ...CONFIG.browserOptions.args,
+        `--remote-debugging-port=${9222 + instanceIndex}`,
+        `--user-data-dir=${path.join(
+          BROWSER_DATA_DIR,
+          `instance-${instanceIndex}`
+        )}`,
+      ],
+    };
+
+    // Add proxy if provided
+    if (proxy) {
+      const [host, port, username, password] = proxy.split(":");
+      browserOptions.args.push(`--proxy-server=${host}:${port}`);
+      browserOptions.args.push(`--proxy-auth=${username}:${password}`);
+    }
+
     browser = await launchBrowserWithRetry(instanceIndex);
     page = await browser.newPage();
     await page.setUserAgent(CONFIG.userAgent);
@@ -814,4 +834,4 @@ process.on("SIGTERM", async () => {
   process.exit();
 });
 
-export { startBot, cleanup };
+export { startBot };
