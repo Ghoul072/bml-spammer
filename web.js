@@ -1,11 +1,7 @@
 import axios from "axios";
 import puppeteer from "puppeteer";
-import { exec } from "child_process";
-import { promisify } from "util";
 import fs from "fs";
 import path from "path";
-
-const execAsync = promisify(exec);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -636,6 +632,7 @@ async function startBot(instanceIndex = 0) {
     "phone number": credentials.phoneNumber,
     "what should I call you?": credentials.name,
     "Can I have your ID Card": credentials.idCard,
+    Police: "I already went to the police and they said I should talk to you",
     "Were you satisfied with our live agent's help?": "Very Poor",
     "Now, can you tell me about your overall chat experience with me (Aaya)?":
       "Very Poor",

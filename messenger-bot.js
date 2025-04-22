@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import fs from "fs";
 
 const responses = {
+  Police: "I already went to the police and they said I should talk to you",
   "Were you satisfied with our live agent's help?": "Very Poor",
   "Now, can you tell me about your overall chat experience with me (Aaya)?":
     "Very Poor",
