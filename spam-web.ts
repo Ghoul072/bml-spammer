@@ -2,8 +2,8 @@ import { startBot } from "./web.ts";
 import fs from "fs";
 import path from "path";
 
-const NUM_CONCURRENT_INSTANCES = 100;
-const INSTANCE_LIFETIME = 100 * 60 * 1000;
+const NUM_CONCURRENT_INSTANCES = 5;
+const INSTANCE_LIFETIME = 5 * 60 * 1000;
 const DELAY_BETWEEN_INSTANCES = 60 * 1000; // Reduced to 2 seconds since we're using separate browsers
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
