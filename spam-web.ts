@@ -4,7 +4,7 @@ import path from "path";
 
 const USE_PROXY = true; // Set to true to enable proxy rotation
 const NUM_CONCURRENT_INSTANCES = 5;
-const INSTANCE_LIFETIME = 5 * 60 * 1000;
+const INSTANCE_LIFETIME = 1 * 60 * 1000;
 const DELAY_BETWEEN_INSTANCES = 10 * 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
