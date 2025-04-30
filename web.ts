@@ -1,5 +1,5 @@
 import axios from "axios";
-import puppeteer, { Page } from "puppeteer";
+import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 
@@ -58,7 +58,7 @@ const CONFIG = {
     retry: 5000,
   },
   browserOptions: {
-    headless: true,
+    headless: false,
     defaultViewport: {
       width: 1920,
       height: 1080,
@@ -205,7 +205,7 @@ async function launchBrowserWithRetry(instanceIndex, retryCount = 0) {
   }
 }
 
-async function takeErrorScreenshot(page: Page, prefix: string) {
+async function takeErrorScreenshot(page, prefix) {
   try {
     // Check if page is still valid
     if (!page || page.isClosed()) {
@@ -271,8 +271,10 @@ async function takeErrorScreenshot(page: Page, prefix: string) {
               });
             })
             .then((dataUrl) => {
-              const url = dataUrl as string;
-              const base64Data = url.replace(/^data:image\/\w+;base64,/, "");
+              const base64Data = dataUrl.replace(
+                /^data:image\/\w+;base64,/,
+                ""
+              );
               fs.writeFileSync(
                 fallbackFilename,
                 Buffer.from(base64Data, "base64")
@@ -622,14 +624,13 @@ async function startChat(page, responses, instanceId) {
   }
 }
 
-async function startBot(instanceIndex: number, proxy?: string) {
+async function startBot(instanceIndex = 0) {
   const credentials = generateCredentials(instanceIndex);
   const instanceId = credentials.instanceId;
   console.log(`Starting bot ${instanceId} with:`, {
     phone: credentials.phoneNumber,
     name: credentials.name,
     id: credentials.idCard,
-    proxy: proxy ? proxy.split(":")[2] : "none",
   });
 
   const responses: Record<string, string> = {
@@ -666,25 +667,6 @@ async function startBot(instanceIndex: number, proxy?: string) {
   let page;
 
   try {
-    const browserOptions = {
-      ...CONFIG.browserOptions,
-      args: [
-        ...CONFIG.browserOptions.args,
-        `--remote-debugging-port=${9222 + instanceIndex}`,
-        `--user-data-dir=${path.join(
-          BROWSER_DATA_DIR,
-          `instance-${instanceIndex}`
-        )}`,
-      ],
-    };
-
-    // Add proxy if provided
-    if (proxy) {
-      const [host, port, username, password] = proxy.split(":");
-      browserOptions.args.push(`--proxy-server=${host}:${port}`);
-      browserOptions.args.push(`--proxy-auth=${username}:${password}`);
-    }
-
     browser = await launchBrowserWithRetry(instanceIndex);
     page = await browser.newPage();
     await page.setUserAgent(CONFIG.userAgent);
@@ -740,7 +722,7 @@ async function startBot(instanceIndex: number, proxy?: string) {
       console.error("Navigation error:", error.message);
       // Take a screenshot for debugging if needed
       try {
-        await takeErrorScreenshot(page, "navigation-error-");
+        await page.screenshot({ path: `error-${Date.now()}.png` });
       } catch (e) {
         console.error("Failed to take error screenshot:", e.message);
       }
@@ -832,4 +814,4 @@ process.on("SIGTERM", async () => {
   process.exit();
 });
 
-export { startBot };
+export { startBot, cleanup };

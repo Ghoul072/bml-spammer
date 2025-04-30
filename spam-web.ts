@@ -2,31 +2,13 @@ import { startBot } from "./web.ts";
 import fs from "fs";
 import path from "path";
 
-const USE_PROXY = true; // Set to true to enable proxy rotation
+const RESTART_INSTANCES = false; // New control variable
 const NUM_CONCURRENT_INSTANCES = 5;
-const INSTANCE_LIFETIME = 1 * 60 * 1000;
-const DELAY_BETWEEN_INSTANCES = 10 * 1000;
+const INSTANCE_LIFETIME = 5 * 60 * 1000;
+const DELAY_BETWEEN_INSTANCES = 60 * 1000; // Reduced to 2 seconds since we're using separate browsers
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 60000;
 const SCREENSHOTS_DIR = path.join(process.cwd(), "screenshots");
-
-// Load proxies if enabled
-let proxies: string[] = [];
-if (USE_PROXY) {
-  try {
-    const proxyConfig = JSON.parse(
-      fs.readFileSync(
-        path.join(process.cwd(), "config", "proxies.json"),
-        "utf8"
-      )
-    );
-    proxies = proxyConfig.proxies;
-    console.log(`Loaded ${proxies.length} proxies`);
-  } catch (error) {
-    console.error("Failed to load proxies:", error);
-    process.exit(1);
-  }
-}
 
 // Create directory for browser data if it doesn't exist
 const BROWSER_DATA_DIR = "./browser-data";
@@ -44,13 +26,6 @@ class InstanceManager {
     this.instances = new Map();
     this.instanceCounter = 0;
     this.setupDirectories();
-  }
-
-  getProxyForInstance(instanceIndex: number) {
-    if (!USE_PROXY || proxies.length === 0) return null;
-    // Use modulo to cycle through proxies based on instance index
-    const proxyIndex = instanceIndex % proxies.length;
-    return proxies[proxyIndex];
   }
 
   setupDirectories() {
@@ -77,16 +52,10 @@ class InstanceManager {
 
   async startInstance(instanceIndex) {
     const instanceId = instanceIndex + 1;
-    const proxy = this.getProxyForInstance(instanceIndex);
 
     try {
-      console.log(
-        `Starting instance ${instanceId}${
-          proxy ? ` with proxy ${proxy.split(":")[2]}` : ""
-        }`
-      );
+      console.log(`Starting instance ${instanceId}`);
 
-      // Create unique directory for this instance
       const instanceDir = path.join(
         BROWSER_DATA_DIR,
         `instance-${instanceIndex}`
@@ -95,29 +64,32 @@ class InstanceManager {
         fs.mkdirSync(instanceDir, { recursive: true });
       }
 
-      // Start the bot with timeout and proxy
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Instance ${instanceId} lifetime exceeded`));
-        }, INSTANCE_LIFETIME);
-      });
+      // Only create timeout promise if RESTART_INSTANCES is true
+      const timeoutPromise = RESTART_INSTANCES
+        ? new Promise((_, reject) => {
+            setTimeout(() => {
+              reject(new Error(`Instance ${instanceId} lifetime exceeded`));
+            }, INSTANCE_LIFETIME);
+          })
+        : new Promise(() => {}); // Never resolves if RESTART_INSTANCES is false
 
-      const botPromise = startBot(instanceIndex, proxy ?? undefined);
+      const botPromise = startBot(instanceIndex);
 
-      // Store instance information
       this.instances.set(instanceId, {
         startTime: Date.now(),
         status: "running",
         retryCount: 0,
-        proxy: proxy ? proxy.split(":")[2] : null,
       });
 
-      // Race between bot and timeout
-      await Promise.race([botPromise, timeoutPromise]);
+      // Only race against timeout if RESTART_INSTANCES is true
+      if (RESTART_INSTANCES) {
+        await Promise.race([botPromise, timeoutPromise]);
+      } else {
+        await botPromise; // Just wait for the bot if no restarts
+      }
     } catch (error) {
       console.error(`Instance ${instanceId} error:`, error.message);
 
-      // Ensure error screenshots are saved even for instance startup failures
       if (error.page) {
         await captureErrorState(
           error.page,
@@ -135,7 +107,6 @@ class InstanceManager {
           `Retrying instance ${instanceId} (Attempt ${instance.retryCount}/${MAX_RETRIES})`
         );
 
-        // Clean up instance directory before retry
         try {
           const instanceDir = path.join(
             BROWSER_DATA_DIR,
@@ -155,9 +126,11 @@ class InstanceManager {
         return this.startInstance(instanceIndex);
       }
     } finally {
-      // Cleanup regardless of success or failure
-      this.instances.delete(instanceId);
-      this.startNewInstanceIfNeeded();
+      // Only cleanup and start new instance if RESTART_INSTANCES is true
+      if (RESTART_INSTANCES) {
+        this.instances.delete(instanceId);
+        this.startNewInstanceIfNeeded();
+      }
     }
   }
 
