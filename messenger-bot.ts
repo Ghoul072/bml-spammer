@@ -34,6 +34,7 @@ const responses = {
 const defaultReply = "Give me back my money."; // <== you can change this later or use Claude
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutes in milliseconds
 
 (async () => {
   try {
@@ -94,6 +95,34 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     console.log("👀 Watching for new messages...");
 
     let lastProcessedMessage = "";
+    let lastMessageTime = Date.now();
+    let inactivityTimer: NodeJS.Timeout | null = null;
+
+    // Function to send default message
+    const sendDefaultMessage = async (page: any) => {
+      try {
+        console.log(
+          `💬 [Bot] Sending default message due to inactivity: "${defaultReply}"`
+        );
+        await page.waitForSelector('[aria-label="Message"]');
+        await page.type('[aria-label="Message"]', defaultReply);
+        await page.keyboard.press("Enter");
+        lastMessageTime = Date.now(); // Reset timer after sending
+      } catch (err) {
+        console.error("Failed to send inactivity message:", err.message);
+      }
+    };
+
+    // Function to reset/start inactivity timer
+    const resetInactivityTimer = (page: any) => {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+      }
+      inactivityTimer = setTimeout(() => {
+        sendDefaultMessage(page);
+        resetInactivityTimer(page); // Set up next timer
+      }, INACTIVITY_TIMEOUT);
+    };
 
     while (true) {
       try {
@@ -141,6 +170,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           await page.keyboard.press("Enter");
 
           lastProcessedMessage = mostRecentMessage;
+          lastMessageTime = Date.now(); // Update last message time
+          resetInactivityTimer(page); // Reset inactivity timer after sending a message
         }
 
         await delay(5000);
